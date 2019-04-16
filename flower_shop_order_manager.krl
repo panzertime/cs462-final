@@ -39,22 +39,6 @@ ruleset flower_shop_order_manager {
     }
   }
   
-  rule update_orders {
-    select when internal orders_updated
-    foreach subs:established("Tx_role","driver") setting (subscription)
-    pre {
-      orders = ent:orders
-    }
-    event:send(
-      { "eci": subscription{"Tx"}, 
-        "eid": "orders_updated",
-        "domain": "orders", 
-        "type": "updated",
-        "attrs": {"open_orders": orders}
-      }
-    )
-  }
-  
   rule new_bid {
     select when internal new_bid
     pre {
@@ -77,6 +61,8 @@ ruleset flower_shop_order_manager {
       order_id = event:attr("order_id");
       driver_id = event:attr("driver_id");
       out_for_delivery = {"driver_id": driver_id, "timestamp": time:now()};
+      order = ent:orders{order_id}
+      bid = ent:bids{order_id}{driver_id}
     }
     if not (ent:bids >< order_id && ent:bids{order_id} >< driver_id) then
       send_directive("That order or bid is now unavailable")
@@ -84,6 +70,8 @@ ruleset flower_shop_order_manager {
       ent:bids := ent:bids.delete(order_id);
       ent:orders := ent:orders.delete(order_id);
       ent:out_for_delivery{order_id} := out_for_delivery;
+      raise internal event "order_assigned"
+        attributes {"order": order, "bid": bid};
       raise internal event "orders_updated"
     }
   }
@@ -94,9 +82,10 @@ ruleset flower_shop_order_manager {
       order_id = event:attr("order_id").isnull() => random:uuid() |
         event:attr("order_id");
       address = event:attr("address");
+      order = {}.put("address", address).put("shop_id", meta:picoId).put("order_id", order_id);
     }
     always {  
-      ent:orders := ent:orders.put(order_id, address);
+      ent:orders := ent:orders.put(order_id, order);
       raise internal event "orders_updated"
     }
   }

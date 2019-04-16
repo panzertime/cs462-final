@@ -1,5 +1,6 @@
 ruleset flower_shop_endpoint {
   meta {
+    use module io.picolabs.subscription alias subs
     use module flower_shop_driver_manager
     use module flower_shop_order_manager
     use module flower_shop_profile
@@ -40,6 +41,7 @@ ruleset flower_shop_endpoint {
     }
   }
   
+  // Incoming 
   rule driver_register {
     select when driver subscribe 
     pre {
@@ -90,5 +92,45 @@ ruleset flower_shop_endpoint {
           "order_id": order_id
         }
     }
+  }
+  
+  rule test {
+    select when test event
+    pre {
+      message = event:attr("message").klog("MESSAGE")
+    }
+  }
+  
+  // Outgoing 
+  rule update_orders {
+    select when internal orders_updated
+    foreach subs:established("Tx_role","driver") setting (subscription)
+    pre {
+      orders = flower_shop_order_manager:orders();
+    }
+    event:send(
+      { "eci": subscription{"Tx"}, 
+        "eid": "orders_updated",
+        "domain": "shop", 
+        "type": "orders_updated",
+        "attrs": {"open_orders": orders}
+      }
+    )
+  }
+  
+  rule order_assigned {
+    select when internal order_assigned
+    pre {
+      order = event:attr("order").klog("DRIVER_ORDER")
+      bid = event:attr("bid").klog("DRIVER_BID")
+      driver_eci = drivers(){bid{"driver_id"}}.klog("DRIVER_X");
+    }
+    event:send(
+      { "eci": driver_eci, 
+        "eid": "Order Assigned",
+        "domain": "shop", 
+        "type": "bid_accepted",
+        "attrs": {"order": order, "bid": bid}
+      })
   }
 }
