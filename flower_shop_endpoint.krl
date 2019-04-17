@@ -141,7 +141,8 @@ ruleset flower_shop_endpoint {
     foreach subs:established("Tx_role","driver") setting (subscription)
     pre {
       orders = {}.put("sequence", ent:sequence)
-                  .put("open_orders", flower_shop_order_manager:orders()); 
+                  .put("open_orders", flower_shop_order_manager:orders())
+                  .put("shop_id", id()); 
     }
     event:send(
       { "eci": subscription{"Tx"}, 
