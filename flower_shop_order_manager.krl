@@ -1,20 +1,19 @@
 ruleset flower_shop_order_manager {
   meta {
     use module io.picolabs.subscription alias subs
-    shares __testing, orders, bids, out_for_delivery, auto_assign_driver
-    provides bids, orders, auto_assign_driver, out_for_delivery
+    shares __testing, orders, bids, out_for_delivery, deliveries, auto_assign_driver
+    provides bids, orders, auto_assign_driver, deliveries, out_for_delivery
   }
   global {
     __testing = { "queries":
       [ { "name": "__testing" },
         { "name": "out_for_delivery"},
+        { "name": "deliveries"},
         { "name": "bids"},
         { "name": "orders"},
         { "name": "auto_assign_driver"}
-      //, { "name": "entry", "args": [ "key" ] }
       ] , "events":
-      [ //{ "domain": "d1", "type": "t1" }
-      //, { "domain": "d2", "type": "t2", "attrs": [ "a1", "a2" ] }
+      [ 
         { "domain": "internal", "type": "new_order", 
             "attrs": [ "order_id", "address" ]},
         { "domain": "internal", "type": "clear_orders" },
@@ -27,6 +26,7 @@ ruleset flower_shop_order_manager {
     orders = function() { ent:orders }
     bids = function() { ent:bids }
     out_for_delivery = function() { ent:out_for_delivery }
+    deliveries = function() { ent:deliveries }
     auto_assign_driver = function() { ent:auto_assign_driver }
   }
   rule initialize {
@@ -35,6 +35,7 @@ ruleset flower_shop_order_manager {
       ent:orders := {};
       ent:bids := {};
       ent:out_for_delivery := {};
+      ent:deliveries := [];
       ent:auto_assign_driver := true;
     }
   }
@@ -48,7 +49,7 @@ ruleset flower_shop_order_manager {
       bid = {
         "driver_id": driver_id,
         "bid_id": bid_id,
-        "bid_amount": event:attr("bid_amount") }.klog("BID");
+        "bid_amount": event:attr("bid_amount") };
     }
     always {
       ent:bids{order_id} := ent:bids{order_id}.defaultsTo({}).put([driver_id], bid);
@@ -63,6 +64,7 @@ ruleset flower_shop_order_manager {
       out_for_delivery = {"driver_id": driver_id, "timestamp": time:now()};
       order = ent:orders{order_id}
       bid = ent:bids{order_id}{driver_id}
+      address = order{"address"};
     }
     if not (ent:bids >< order_id && ent:bids{order_id} >< driver_id) then
       send_directive("That order or bid is now unavailable")
@@ -71,7 +73,7 @@ ruleset flower_shop_order_manager {
       ent:orders := ent:orders.delete(order_id);
       ent:out_for_delivery{order_id} := out_for_delivery;
       raise internal event "order_assigned"
-        attributes {"order": order, "bid": bid};
+        attributes {"order": order, "bid": bid, "address": address};
       raise internal event "orders_updated"
     }
   }
@@ -97,11 +99,17 @@ ruleset flower_shop_order_manager {
       order_id = event:attr("order_id");
       order = ent:out_for_delivery{order_id}
       delivery_time = order{"timestamp"};
+      new_delivery = {}.put("driver_id", driver_id)
+                        .put("order_id", order_id)
+                        .put("timestamp", delivery_time)
+                        .put("address", order{"address"});
+      old_deliveries = ent:deliveries;
     }
     if not (ent:out_for_delivery{order_id}{"driver_id"} == driver_id) then
       send_directive("That order belongs to another driver")
     notfired {
-      ent:out_for_delivery := ent:out_for_delivery.delete(order_id).klog("OFD");
+      ent:deliveries := old_deliveries.append(new_delivery);
+      ent:out_for_delivery := ent:out_for_delivery.delete(order_id);
       raise twitter event delivery_complete
         attributes {
           "driver_id": driver_id,

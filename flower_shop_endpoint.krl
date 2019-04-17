@@ -94,10 +94,36 @@ ruleset flower_shop_endpoint {
     }
   }
   
-  rule test {
-    select when test event
+  // { "domain": "internal", "type": "get_directions_to_shop",
+  //           "attrs": [ "driver_id", "driver_location"]},
+  //       { "domain": "internal", "type": "get_directions_to_delivery",
+  //           "attrs": [ "driver_id", "driver_location", "order_id"]}
+  rule get_directions_to_shop {
+    select when driver get_directions_to_shop
     pre {
-      message = event:attr("message").klog("MESSAGE")
+      driver_id = event:attr("driver_id");
+      driver_location = event:attr("driver_location")
+    }
+    if (driver_id.isnull() || driver_location.isnull()) then
+      send_directive("Must inclued driver_id and driver_location")
+    notfired {
+      raise internal event "get_directions_to_shop"
+        attributes event:attrs
+    }
+  }
+  
+  rule get_directions_to_delivery {
+    select when driver get_directions_to_delivery
+    pre {
+      driver_id = event:attr("driver_id");
+      driver_location = event:attr("driver_location")
+      order_id = event:attr("order_id")
+    }
+    if (driver_id.isnull() || driver_location.isnull() || order_id.isnull()) then
+      send_directive("Must inclued driver_id, driver_location, and order_id")
+    notfired {
+      raise internal event "get_directions_to_delivery"
+        attributes event:attrs
     }
   }
   
@@ -121,9 +147,9 @@ ruleset flower_shop_endpoint {
   rule order_assigned {
     select when internal order_assigned
     pre {
-      order = event:attr("order").klog("DRIVER_ORDER")
-      bid = event:attr("bid").klog("DRIVER_BID")
-      driver_eci = drivers(){bid{"driver_id"}}.klog("DRIVER_X");
+      order = event:attr("order")
+      bid = event:attr("bid")
+      driver_eci = drivers(){bid{"driver_id"}};
     }
     event:send(
       { "eci": driver_eci, 
@@ -131,6 +157,24 @@ ruleset flower_shop_endpoint {
         "domain": "shop", 
         "type": "bid_accepted",
         "attrs": {"order": order, "bid": bid}
+      })
+  }
+  
+  rule google_response {
+    select when internal google_response
+    pre {
+      label = event:attr("label").split(re#:#);
+      driver_id = label[1];
+      type = label[0];
+      directions = event:attr("directions")
+      driver_eci = drivers(){driver_id};
+    }
+    event:send(
+      { "eci": driver_eci, 
+        "eid": "Google Resoponse",
+        "domain": "shop", 
+        "type": "google_response" + type,
+        "attrs": {"directions": directions}
       })
   }
 }

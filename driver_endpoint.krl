@@ -8,9 +8,10 @@ ruleset driver_endpoint {
       [ { "name": "__testing" },
         { "name": "shop_map" }
       ] , "events":
-      [ //{ "domain": "d1", "type": "t1" }
-      //, { "domain": "d2", "type": "t2", "attrs": [ "a1", "a2" ] }
-        { "domain": "test", "type": "event", "attrs": [ "shop_id"] }
+      [ 
+        { "domain": "test", "type": "event", "attrs": [ "shop_id"] },
+        { "domain": "internal", "type": "get_directions_to_shop", 
+            "attrs": [ "driver_location", "shop_id"] }
       ]
     }
     shop_map = function() { ent:shop_map }
@@ -28,11 +29,11 @@ ruleset driver_endpoint {
     select when wrangler inbound_pending_subscription_added
     pre {
       tx = event:attr("Tx")
-      // tx = event:attr("wellKnown_Tx").klog("WELL_KOWNN_TX")
       shop_id = event:attr("shop_id")
     }
-    always {
+    fired {
       ent:shop_map{shop_id} := tx;
+      raise wrangler event "pending_subscription_approval" attributes event:attrs
     }
   }
   
@@ -55,9 +56,23 @@ ruleset driver_endpoint {
     }
   }
   
+  rule google_response_to_shop {
+    select when shop google_response_to_shop
+    pre {
+      directions = event:attr("directions");
+    }
+  }
+  
+  rule google_response_to_delivery {
+    select when shop google_response_to_delivery
+    pre {
+      directions = event:attr("directions");
+    }
+  }
+  
   // Outgoing
   rule delivery_complete {
-    select when delivery complete
+    select when internal delivery_complete
       pre {
         order_id = event:attr("order_id")
       }
@@ -67,7 +82,37 @@ ruleset driver_endpoint {
         "domain": "driver", 
         "type": "delivery_complete",
         "attrs": { "driver_id": meta:picoId, "order_id": order_id }
-      }
-    )
+      })
+  }
+  
+  rule get_directions_to_shop {
+    select when internal get_directions_to_shop
+    pre {
+      driver_location = event:attr("driver_location")
+      shop_id = event:attr("shop_id")
+    }
+    event:send(
+      { "eci": ent:shop_map{shop_id}, 
+        "eid": "Directions To Shop",
+        "domain": "driver", 
+        "type": "get_directions_to_shop",
+        "attrs": { "driver_id": meta:picoId, "driver_location": driver_location }
+      })
+  }
+  
+  rule get_directions_to_delivery {
+    select when internal get_directions_to_delivery
+    pre {
+      driver_location = event:attr("driver_location")
+      shop_id = event:attr("shop_id")
+      order_id = event:attr("order_id")
+    }
+    event:send(
+      { "eci": ent:shop_map{shop_id}, 
+        "eid": "Directions To Shop",
+        "domain": "driver", 
+        "type": "get_directions_to_delivery",
+        "attrs": { "driver_id": meta:picoId, "driver_location": driver_location, "order_id": order_id }
+      })
   }
 }
