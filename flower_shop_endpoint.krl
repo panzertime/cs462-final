@@ -128,11 +128,20 @@ ruleset flower_shop_endpoint {
   }
   
   // Outgoing 
-  rule update_orders {
+  rule update_sequence {
     select when internal orders_updated
+    always { 
+      ent:sequence := ent:sequence + 1; 
+      raise internal event "orders_updated_ns"
+        attributes event:attrs
+    }
+  }
+  rule update_orders {
+    select when internal orders_updated_ns
     foreach subs:established("Tx_role","driver") setting (subscription)
     pre {
-      orders = flower_shop_order_manager:orders();
+      orders = {}.put("sequence", ent:sequence)
+                  .put("open_orders", flower_shop_order_manager:orders()); 
     }
     event:send(
       { "eci": subscription{"Tx"}, 
