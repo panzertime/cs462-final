@@ -1,41 +1,41 @@
 ruleset gossip {
   meta {
-    name "Woven Thermometer Gossip Ruleset"
+    name "Flower Driver Gossip Ruleset"
     description <<
       Ruleset
-    for Gossiping With Wovyn Thermometers
+    for Gossiping With Flower Drivers
       >>
       author "RT Hatfield"
     logging on
     
     use module io.picolabs.wrangler alias wrangler
     use module io.picolabs.subscription alias subscription
-    use module sensor_profile
-    use module temperature_store
     
     provides 
-      temps,
+      orders,
       peers,
       seen,
       peerseen
     shares
-      temps,
+      orders,
       peers,
       seen,
       peerseen
   }
 
   global {
-    temps = function() {
+    orders = function() {
       get_rumors()
     }
     peers = function() {
       get_peers()
     }
     seen = function() {
+      // {store_id: sequence}
       get_seen()
     }
     peerseen = function() {
+      // {peer_id: {store_id: sequence}}
       get_peer_seen()
     }
     get_peers = function() {
@@ -43,97 +43,97 @@ ruleset gossip {
       ent:peers.isnull() => {} | ent:peers
     }
     
-    get_sequence = function() {
-      ent:sequence.isnull() => 0 | ent:sequence
-    }
-    
     get_rumors = function() {
-      // {peer_id : messageid: message}
+      /*
+          {
+            shop_id: {
+              sequence: 7,
+              orders: [...]
+            },
+            shop_id2: { ... }
+          }
+      */
       ent:rumors.isnull() => {} | ent:rumors
     }
     
     get_peer_seen = function() {
-      // {peerId: origin: max_sequence}
+      // {peer_id: {store_id: sequence}}
       ent:peer_seen.isnull() => {} | ent:peer_seen
     }
     
     get_seen = function() {
-      // {origin: highest sequence}
+      // {store_id: sequence}
       ent:seen.isnull() => {} | ent:seen
-    }
-    
-    get_message_id = function() {
-      meta:picoId.as("String") + ":" + get_sequence().as("String")
     }
     
     process = function() {
       ent:process.isnull() => true | ent:process
     }
     
-    prepareMessage = function(node, type) {
-      rumor = get_rumor(node{"peer_id"});
-      type = rumor.isnull() => "seen" | ["rumor", "seen"][random:integer(1)];
-      body = (type == "seen") =>  get_seen() | rumor; 
+    prepareMessage = function(node) {
+      rumor = pick_rumor(node{"peer_id"});
 
       // if we can't get a fresh rumor for that peer (i.e. everyone is caught up)
       // we default to sending a seen message. if we have peers that need rumors,
       // they should show up here first and have a 50/50 chance of getting one
+
+      type = rumor.isnull() => "seen" | ["rumor", "seen"][random:integer(1)];
+      body = (type == "seen") =>  get_seen() | rumor{"body"}; 
+      attrs = (type == "seen") => 
+          {
+              "node": meta:picoId,
+              "body": body
+          } |
+          {
+            "node": meta:picoId,
+            "store_id": rumor{"store_id"},
+            "body": body
+          }
+
       {
         "eci": node{"Tx"},
         "domain": "gossip",
         "type": type,
-        "attrs": {
-          "node": meta:picoId,
-          "body": body
-        }
+        "attrs": attrs
       }
     }
     
-    get_rumor = function(peer_id) {
+    pick_rumor = function(peer_id) {
       // given this peer ID, pick something they haven't seen and send it
+      // {store_id: 0, body:{seq, orders}}
       p_seen = get_peer_seen().get(peer_id);
-      rumor = get_rumors().values().reduce(function(acc, rumors){
-        acc.append(rumors)
-      }, []).filter(function(rumor){
-        origin = rumor{"SensorID"};
-        sequence = rumor{"MessageID"}.split(":")[1].as("Number");
-        sequence > p_seen.get(origin).defaultsTo(-1)
-      }).head();
-      rumor.values()[0]
+      // let's recycle the select_unseen from earlier, but just pick one of them
+      unseen = select_unseen(p_seen);
+      unseen.head()
     }
     
     select_unseen = function(seen) {
-      // takes map of seen messages, returns array of messages to forward
-      get_rumors().values().reduce(function(acc, rumors){
-        acc.append(rumors.values())
-      }, []).filter(function(rumor){
-        origin = rumor{"SensorID"};
-        sequence = rumor{"MessageID"}.split(":")[1].as("Number");
-        sequence > seen.get(origin).defaultsTo(-1)
-      })
+      messages = [];
+      get_rumors().map(function(k, v) {
+        // if v{sequence} > seen{key}, 
+        //  add {key: v}
+        msg = {"store_id" : k, "body" : v}
+        messages = v{"sequence"} > seen("key") => messages.append(msg) | messages
+      });
+      messages
     }
     
-    store_rumor = function(rumor) {
-      rumors = get_rumors().get(rumor{"SensorID"}).defaultsTo({});
-      rumors = rumors.put([rumor{"MessageID"}], rumor);
-      get_rumors().put([rumor{"SensorID"}], rumors);
+    store_rumor = function(store_id, rumor) {
+      get_rumors().put(store_id, rumor)
     }
       
       
     heartbeat_update = function(event, peer_id) {
-      // basically check if we sent a rumor, and if so, we update the peer seen
-      body = event{"body"}.klog("Body in heartbeat_update");
-      body{"SensorID"}.klog("Origin in heartbeat_update");
+      attrs = event{"attrs"};
+      body = attrs{"body"}:
       event{"type"} == "rumor" => 
-          update_peer_seen(peer_id, body{"SensorID"}, body{"MessageID"}.split(":")[1].as("Number")) |
+          update_peer_seen(peer_id, attrs{"store_id"}, body{"sequence"}) |
           get_peer_seen()
     }
     
-    update_peer_seen = function(peer_id, origin, sequence) {
-      origin.klog("Origin in update_peer_seen");
-      max_seq = get_peer_seen().get([peer_id, origin]).defaultsTo(0);
-      p_seen = get_peer_seen().get(peer_id).defaultsTo({});
-      new_seen = p_seen.put(origin, (sequence >= max_seq) => sequence | max_seq);
+    update_peer_seen = function(peer_id, store_id, sequence) {
+      new_seen = get_peer_seen().get(peer_id);
+      new_seen = new_seen.set(store_id, sequence);
       get_peer_seen().put(peer_id, new_seen)
     }
     
@@ -142,75 +142,48 @@ ruleset gossip {
     }
     
     update_sent_to_peer = function(peer_id, messages) {
-      peer_seen = get_peer_seen();
-      peer_id.isnull() => peer_seen |
-        messages.reduce(function(acc, rumor) {
-          // issue in here: embedding entire thing
-          origin = rumor{"SensorID"};
-          origin.klog("Origin in update_sent_to_peer");
-          sequence = rumor{"MessageID"}.split(":")[1].as("Number");
-          max_seq = acc.get([peer_id, origin]).defaultsTo(-1);
-          p_seen = acc.get(peer_id).defaultsTo({});
-          new_seen = p_seen.put(origin, (sequence >= max_seq) => sequence | max_seq);
-          
-          
-          acc.put(peer_id, new_seen).klog("new seen")
-        }, peer_seen)
-    }
-    
-    update_seen = function(origin, sequence) {
-      max_seq = get_seen().get(origin).defaultsTo(0);
-      new_seq = (sequence - max_seq == 1) => sequence | max_seq;
-      origin.klog("NEW SEEN ORIGIN");
-      new_seq.klog("NEW SEEN SEQUENCE");
-      sequence.klog("MESSAGE SEQUENCE");
-      get_seen().put(origin, new_seq)
-    }
-    
-    start_rumor = function(temp, time) {
-      {
-        "MessageID": get_message_id(),
-        "SensorID": meta:picoId,
-        "Temperature": temp,
-        "Timestamp": time
-      }
-    }
-    
-    getPeer = function() {
-      score_peer = function(peer) {
-        // one point for each sensor they have less info on than we do
-        keys = get_seen().keys().union(get_peer_seen(peer).keys());
-        keys.reduce(function(score, key){
-          diff = get_seen().get(key).defaultsTo(-1) - 
-                 get_peer_seen().get(key).defaultsTo(-1);
-          diff > 0 => score + 1 | score
-        }, 0)
-      };
-      g = get_peer_seen().klog("peerseen");
-      // find a set of just sensors who need something
-      peer_ids = get_peer_seen().filter(function(peer) {
-        k = peer.klog("peer");
-        s = score_peer(peer).klog("score");
-        score_peer(peer) > 0 || peer.keys().length() == 0
-      }).keys();
+      // msg = {"store_id" : k, "body" : {"sequence" : 0, "orders" = []}
       
-      all_peers = get_peers().keys();
-      filter_idx = random:integer(peer_ids.length() - 1).klog("Filter index");
-      bak_idx = random:integer(all_peers.length() - 1).klog("Backup index");
-      peer_id = peer_ids[filter_idx].klog("Filtered peer");
-      peer_id = (peer_id.isnull() => all_peers[bak_idx]
-        | peer_id).klog("Backup peer");
+      peer_seen = get_peer_seen()
+      messages.reduce(function(acc, msg) {
+        store_id = msg{"store_id"};
+        rumor = msg{"body"};
+        sequence = rumor{"sequence"};
+        p_seen = acc.get(peer_id); // should never be null
+        new_seen = p_seen.put(store_id, sequence)
+        acc.put(peer_id, new_seen)
+      }, peer_seen)
+    }
 
-      
-      // pick randomly from the reduced set if we can, the main set otherwise
-      // random choice means everyone gets a chance, though when we have 
-      // rumors to send they get to go before seens get sent to peers who have
-      // our rumors already
-      // i.e. we don't update ourselves until we've updated our friends
-     
-        
-      get_peers().klog("peers available");
-      peer_id.klog("chosen peer id");
+    update_seen = function(shop_id, sequence) {
+      get_seen().put(shop_id, new_seq)
+    }
+
+    getPeer = function() {
+      // okay. easy way:
+      // peers = peer_seen.map({k = k, v = score(v)})
+      // score(v){union the keys, then reduce to total ahead/behind}
+      // sort those keys by score (lowest = most behind)
+      // pick from top of list
+      score = function(seen_list){
+        stores = get_seen().keys().union(seen_list.keys());
+        stores.reduce(function(score, store) {
+          // subtract our seen for that store_id from the one in the seen_list
+          score + (seen_list.get(store).defaultsTo(-1) - get_seen().get(store).defaultsTo(-1))
+        }, 0)
+      }
+
+      peer_scores = get_peer_seen().map(function(k, v) {
+        {k: score(v)};
+      })
+
+      peer_id = peer_scores.keys().sort(function(a, b){
+        score_a = peer_scores.get(a);
+        score_b = peer_scores.get(b);
+        score_a < score_b  => -1 |
+            score_a == score_b =>  0 |
+            1
+      }).head();
       
       sub = subscription:established("Id", get_peers(){"peer_id"})[0];
       {
@@ -222,7 +195,7 @@ ruleset gossip {
     }
     
     pump_velocity = function() {
-      n = 2;
+      n = 15;
       time:add(time:now(), {"seconds": n})
     }
     
@@ -236,7 +209,8 @@ ruleset gossip {
           "type": "rumor",
           "attrs": {
             "node": meta:picoId,
-            "body": msg
+            "store_id": msg{"store_id"}
+            "body": msg{"body"}
           }
         }, host);
         respondToSeen(messages.tail(), Tx, host)
@@ -255,7 +229,8 @@ ruleset gossip {
     fired {
       p = peer.klog("PEER BEFORE HEARTBEAT UPDATE");
       ev.klog("Event in heartbeat");
-      ent:peer_seen := heartbeat_update(ev{"attrs"}, peer{"peer_id"}); 
+      // next line will probably be broken by store_ids
+      ent:peer_seen := heartbeat_update(ev, peer{"peer_id"}); 
     } finally {
       schedule gossip event "heartbeat" at pump_velocity()
     }
@@ -287,18 +262,17 @@ ruleset gossip {
     pre {
       rumor = event:attr("body")
       peer_id = event:attr("node")
-      origin = rumor{"SensorID"}
-      message_id = rumor{"MessageID"}
-      sequence = message_id.split(":")[1].as("Number")
-      max_seen = get_seen().get(origin).defaultsTo(-1)
+      store_id = event:attr("store_id")
+      sequence = rumor{"sequence"}
+      max_seen = get_seen().get(store_id).defaultsTo(-1)
     }
-    if (sequence > max_seen && not origin.isnull()) then
+    if (sequence > max_seen && not store_id.isnull()) then
       noop();
     fired {
       p = peer_id.klog("PEER ID BEFORE RUMOR UPDATE");
-      ent:rumors := store_rumor(rumor);
-      ent:seen := update_seen(origin, sequence);
-      ent:peer_seen := update_peer_seen(peer_id, origin, sequence);
+      ent:rumors := store_rumor(store_id, rumor);
+      ent:seen := update_seen(store_id, sequence);
+      ent:peer_seen := update_peer_seen(peer_id, store_id, sequence);
     }
   }
   
@@ -321,24 +295,26 @@ ruleset gossip {
   }
   
   rule increment_sequence {
-    select when wovyn new_temperature_reading
+    select when shop orders_updated
     pre {
-      temp = event:attr("temperature")
-      time = event:attr("timestamp")
-      rumor = start_rumor(temp, time)
+      shop_id = event:attr("shop_id")
+      sequence = event:attr("sequence")
+      curr_seq = get_seen().get(shop_id).defaultsTo(-1)
+      orders = event:attr("open_orders")
+      rumor = {"sequence": sequence, "orders": orders}
     }
-    noop();
-    always {
-      ent:rumors := store_rumor(rumor);
-      ent:seen := update_seen(meta:picoId, get_sequence());
-      ent:sequence := get_sequence() + 1
+    if sequence > curr_seq then
+      noop();
+    fired {
+      ent:rumors := store_rumor(shop_id, rumor);
+      ent:seen := update_seen(shop_id, sequence);
     }
   }
-  
-  
 
   rule auto_accept {
     select when wrangler inbound_pending_subscription_added
+    if event:attr("Rx_role") == "gossip_node" then
+      noop()
     fired {
       raise wrangler event "pending_subscription_approval"
         attributes event:attrs
@@ -379,8 +355,8 @@ ruleset gossip {
         raise wrangler event "subscription" attributes
              { "name" : name,
                "peer_ids" : ids,
-               "Rx_role": "node",
-               "Tx_role": "node",
+               "Rx_role": "gossip_node",
+               "Tx_role": "gossip_node",
                "channel_type": "subscription",
                "wellKnown_Tx": wellKnown,
                "Tx_host": host
