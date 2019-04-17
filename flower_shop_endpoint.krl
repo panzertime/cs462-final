@@ -37,7 +37,7 @@ ruleset flower_shop_endpoint {
   rule initialize {
     select when wrangler ruleset_added where rids >< meta:rid
     always {
-      
+		ent:sequence := 0;      
     }
   }
   
@@ -148,7 +148,7 @@ ruleset flower_shop_endpoint {
         "eid": "orders_updated",
         "domain": "shop", 
         "type": "orders_updated",
-        "attrs": {"open_orders": orders}
+        "attrs": orders
       }
     )
   }
