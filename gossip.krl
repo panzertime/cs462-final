@@ -325,7 +325,6 @@ ruleset gossip {
     pre {
       new_peer_eci = event:attr("eci")
       new_peer_host = event:attr("host")
-      name = sensor_profile:get_profile(){"name"}.isnull() => wrangler:randomPicoName() | sensor_profile:get_profile(){"name"}
     }
     event:send(
       {
