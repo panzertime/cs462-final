@@ -88,7 +88,7 @@ ruleset gossip {
             "node": meta:picoId,
             "store_id": rumor{"store_id"},
             "body": body
-          }
+          };
 
       {
         "eci": node{"Tx"},
@@ -108,14 +108,13 @@ ruleset gossip {
     }
     
     select_unseen = function(seen) {
-      messages = [];
-      get_rumors().map(function(k, v) {
-        // if v{sequence} > seen{key}, 
-        //  add {key: v}
-        msg = {"store_id" : k, "body" : v}
-        messages = v{"sequence"} > seen("key") => messages.append(msg) | messages
+      unseen_stores = get_seen().keys().filter(function(k) {
+        get_seen().get(k) > seen.get(k).defaultsTo(-1)
       });
-      messages
+      // so now we have a list of stores that they need
+      unseen_stores.map(function(store) {
+        {"store_id" : store, "body" : get_rumors().get(store)}
+      })
     }
     
     store_rumor = function(store_id, rumor) {
@@ -125,7 +124,7 @@ ruleset gossip {
       
     heartbeat_update = function(event, peer_id) {
       attrs = event{"attrs"};
-      body = attrs{"body"}:
+      body = attrs{"body"};
       event{"type"} == "rumor" => 
           update_peer_seen(peer_id, attrs{"store_id"}, body{"sequence"}) |
           get_peer_seen()
@@ -144,13 +143,13 @@ ruleset gossip {
     update_sent_to_peer = function(peer_id, messages) {
       // msg = {"store_id" : k, "body" : {"sequence" : 0, "orders" = []}
       
-      peer_seen = get_peer_seen()
+      peer_seen = get_peer_seen();
       messages.reduce(function(acc, msg) {
         store_id = msg{"store_id"};
         rumor = msg{"body"};
         sequence = rumor{"sequence"};
         p_seen = acc.get(peer_id); // should never be null
-        new_seen = p_seen.put(store_id, sequence)
+        new_seen = p_seen.put(store_id, sequence);
         acc.put(peer_id, new_seen)
       }, peer_seen)
     }
@@ -171,11 +170,11 @@ ruleset gossip {
           // subtract our seen for that store_id from the one in the seen_list
           score + (seen_list.get(store).defaultsTo(-1) - get_seen().get(store).defaultsTo(-1))
         }, 0)
-      }
+      };
 
       peer_scores = get_peer_seen().map(function(k, v) {
-        {k: score(v)};
-      })
+        {}.put(k, score(v))
+      });
 
       peer_id = peer_scores.keys().sort(function(a, b){
         score_a = peer_scores.get(a);
@@ -209,7 +208,7 @@ ruleset gossip {
           "type": "rumor",
           "attrs": {
             "node": meta:picoId,
-            "store_id": msg{"store_id"}
+            "store_id": msg{"store_id"},
             "body": msg{"body"}
           }
         }, host);
