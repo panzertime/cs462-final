@@ -334,8 +334,7 @@ ruleset gossip {
         "attrs" : {
           "wellKnown" : subscription:wellKnown_Rx(){"id"},
           "host" : meta:host,
-          "ids" : [meta:picoId],
-          "name" : name
+          "ids" : [meta:picoId]
         }
       }, host=new_zone_host)
   }
@@ -344,14 +343,14 @@ ruleset gossip {
     select when gossip hello
     pre {
         wellKnown = event:attr("wellKnown")
-        name = event:attr("name")
+        name = event:attr("name").defaultsTo(wrangler:randomPicoName())
         host = event:attr("host").isnull() => meta:host | event:attr("host")
         ids = event:attr("ids").append(meta:picoId)
       }
       noop();
       fired {
         raise wrangler event "subscription" attributes
-             { "name" : name,
+             {
                "peer_ids" : ids,
                "Rx_role": "gossip_node",
                "Tx_role": "gossip_node",
@@ -366,7 +365,6 @@ ruleset gossip {
     select when wrangler subscription_added
     pre {
       remoteHost = event:attr("Tx_host").klog("Remote host: ")
-      name = event:attr("name")
       id  = event:attr("Id")
       peer_id = event:attr("peer_ids").difference(meta:picoId)[0]
     }
